@@ -1,0 +1,395 @@
+const script = registerScript({ 
+  name: "ServerAssistant",
+  version: "2.0.0",
+  authors: ["nohurt"]
+});
+
+// фри версия 
+const PlayerEntity = Java.type("net.minecraft.class_1657"); // LivingEntity 
+const NotificationEvent = Java.type("net.ccbluex.liquidbounce.event.events.NotificationEvent")
+const Slots = Java.type("net.ccbluex.liquidbounce.utils.inventory.Slots")
+const Items = Java.type("net.minecraft.item.Items")
+const ItemSlotType = Java.type("net.ccbluex.liquidbounce.features.module.modules.player.invcleaner.ItemSlotType")
+const ClickInventoryAction = Java.type("net.ccbluex.liquidbounce.utils.inventory.ClickInventoryAction")
+const HotbarItemSlot = Java.type("net.ccbluex.liquidbounce.utils.inventory.HotbarItemSlot")
+const InventoryUtilsKt = Java.type("net.ccbluex.liquidbounce.utils.inventory.InventoryUtilsKt")
+const SilentHotbat = Java.type("net.ccbluex.liquidbounce.utils.client.SilentHotbar")
+const SlotActionType = Java.type("net.minecraft.screen.slot.SlotActionType")
+const FontManager = Java.type("net.ccbluex.liquidbounce.render.FontManager")
+const Color4b = Java.type("net.ccbluex.liquidbounce.render.engine.type.Color4b")
+const Vec3 = Java.type("net.ccbluex.liquidbounce.render.engine.type.Vec3")
+const RenderShortcutsKt = Java.type("net.ccbluex.liquidbounce.render.RenderShortcutsKt")
+const FontRendererBuffers = Java.type("net.ccbluex.liquidbounce.render.engine.font.FontRendererBuffers")
+const ScoreboardDisplaySlot = Java.type("net.minecraft.class_8646");
+const BELOW_NAME = ScoreboardDisplaySlot.BELOW_NAME;
+const File = Java.type("java.io.File")
+const Files = Java.type("java.nio.file.Files")
+const Paths = Java.type("java.nio.file.Paths")
+const key_actions = { release: 0, down: 1, repeat: 2 }
+const WHITE = new Color4b(255, 255, 255, 255)
+
+const assitant_items = {
+  disorientation: Items.ENDER_EYE,
+  dust: Items.SUGAR,
+  trap: Items.NETHERITE_SCRAP,
+  aura: Items.PHANTOM_MEMBRANE,
+  tornado: Items.FIRE_CHARGE,
+  layer: Items.DRIED_KELP,
+  prizm: Items.PRISMARINE_SHARD,
+  snowball: Items.SNOWBALL,
+  netherstar: Items.NETHER_STAR,
+  none: null
+}
+
+script.registerModule({
+  name: "Assistant",
+  category: "Misc", 
+  description: "Assistant for FunTime and HW",
+  settings: {
+    menuX: Setting.int({ name: "Menu X", default: 100, range: [0, mc.getWindow().getScaledWidth()] }),
+    menuY: Setting.int({ name: "Menu Y", default: 100, range: [0, mc.getWindow().getScaledHeight()] }),
+    disorientation: Setting.key({ name: "Disorientation", default: "key.keyboard.unknown" }),
+    dust: Setting.key({ name: "Dust", default: "key.keyboard.unknown" }),
+    trap: Setting.key({ name: "Trap", default: "key.keyboard.unknown" }),
+    aura: Setting.key({ name: "Aura", default: "key.keyboard.unknown" }),
+    tornado: Setting.key({ name: "Tornado", default: "key.keyboard.unknown" }),
+    layer: Setting.key({ name: "Layer", default: "key.keyboard.unknown" }),
+prizm: Setting.key({ name: "Prizm", default: "key.keyboard.unknown" }),
+snowball: Setting.key({ name: "Snowball", default: "key.keyboard.unknown" }),
+netherstar: Setting.key({ name: "Netherstar", default: "key.keyboard.unknown" }),
+    swap_delay: Setting.int({ name: "Swap delay", default: 0, range: [0, 20] }),
+    swap_back: Setting.boolean({ name: "Swap Back", default: true }),
+    return_delay: Setting.int({ name: "Return Delay", default: 2, range: [0, 10] }),
+     healthFix: Setting.boolean({ name: "Health Fix", default: false }),
+     checkRadius: Setting.boolean({ name: "Check Radius", default: true }) 
+  }
+}, (mod) => {
+  let current_item = assitant_items.none
+
+let pendingSwaps = []
+
+function scheduleSwap(syncId, serverSlotId, hotbarSlotIndex, delay) {
+  pendingSwaps.push({
+    syncId: syncId,
+    slotId: serverSlotId,        
+    hotbarSlot: hotbarSlotIndex, 
+    ticks: delay
+  })
+}
+
+  function getDistance(a, b) {
+    const dx = a.getX() - b.getX()
+    const dy = a.getY() - b.getY()
+    const dz = a.getZ() - b.getZ()
+    return Math.sqrt(dx*dx + dy*dy + dz*dz)
+  }
+
+  function getHealth(entity) {
+    if (!entity || !entity.world) return 0
+    let health = entity.health || 0
+
+    try {
+      const scoreboard = entity.world.scoreboard
+      const objective = scoreboard.getObjectiveForSlot(BELOW_NAME)
+
+      if (objective && objective.displayName?.string.includes("Здоров")) {
+        const score = objective.scoreboard?.getScore(entity, objective)
+        if (score) health = +score.score
+      }
+    } catch (e) {
+      Client.displayChatMessage("Ошибка: " + e)
+    }
+    return health
+  }
+  
+    function useItem(slot, itemName) {
+  const interaction = mc.interactionManager
+  if (!slot) {
+    Client.eventManager.callEvent(new NotificationEvent("FT-Assistant", `${itemName} не найден`, NotificationEvent.Severity.ERROR))
+    current_item = assitant_items.none
+    return
+  }
+
+  const syncId = mc.player.currentScreenHandler.syncId
+  const hotbarSlotIndex = mc.player.getInventory().selectedSlot // 0..8 
+  const serverSlotId = slot.getIdForServer(mc.currentScreen)    
+
+  if (slot.slotType == ItemSlotType.INVENTORY) {
+    InventoryUtilsKt.openInventorySilently()
+    interaction.clickSlot(syncId, serverSlotId, hotbarSlotIndex, SlotActionType.SWAP, mc.player)
+    InventoryUtilsKt.useHotbarSlotOrOffhand(new HotbarItemSlot(hotbarSlotIndex),
+      mod.settings.swap_delay.value, mc.player.yaw, mc.player.pitch)
+
+    Client.eventManager.callEvent(new NotificationEvent("FT-Assistant", `${itemName} использован`, NotificationEvent.Severity.SUCCESS))
+
+
+    if (mod.settings.swap_back.value) {
+scheduleSwap(syncId, serverSlotId, hotbarSlotIndex, mod.settings.return_delay.value)
+
+}
+
+    InventoryUtilsKt.closeInventorySilently()
+  } else if (slot.slotType == ItemSlotType.HOTBAR) {
+ 
+    SilentHotbat.INSTANCE.selectSlotSilently(this, slot, mod.settings.swap_delay.value)
+    InventoryUtilsKt.useHotbarSlotOrOffhand(slot, mod.settings.swap_delay.value, mc.player.yaw, mc.player.pitch)
+    Client.eventManager.callEvent(new NotificationEvent("FT-Assistant", `${itemName} использован`, NotificationEvent.Severity.SUCCESS))
+  }
+
+  current_item = assitant_items.none
+}
+
+  let tickCounter = 0
+  mod.on("playerTick", () => {
+    if (!mod.settings.healthFix.value) return 
+    tickCounter++
+    if (tickCounter < 20) return
+    tickCounter = 0
+
+    const player = mc.player
+    if (!mc.world) return
+
+    const playersInRange = []
+    for (const entity of mc.world.getEntities()) {
+      if (PlayerEntity.class.isInstance(entity) && entity.getUuid() !== player.getUuid()) {
+        const distance = getDistance(player, entity)
+        if (distance <= 6) {
+          playersInRange.push({ entity, distance })
+        }
+      }
+    }
+
+    playersInRange.sort((a, b) => a.distance - b.distance)
+
+    for (const p of playersInRange) {
+      const newHealth = getHealth(p.entity)
+      p.entity.setHealth(newHealth)
+      p.entity.setAbsorptionAmount(0)
+    }
+  })
+  function isOnCooldown(itemStack) {
+    if (!itemStack) return false
+    const cooldownManager = mc.player.getItemCooldownManager()
+    return cooldownManager.isCoolingDown(itemStack)
+  }
+
+  let cooldownNotified = new Set()
+mod.on("gameTick", e => {
+
+  for (let i = pendingSwaps.length - 1; i >= 0; i--) {
+    const swap = pendingSwaps[i]
+    swap.ticks--
+
+    if (swap.ticks <= 0) {
+      mc.interactionManager.clickSlot(
+        swap.syncId,
+        swap.slotId,      
+        swap.hotbarSlot,  
+        SlotActionType.SWAP,
+        mc.player
+      )
+      pendingSwaps.splice(i, 1)
+    }
+  }
+   for (let key in assitant_items) {
+    const item = assitant_items[key]
+    if (item === assitant_items.none) continue
+
+    let slot = Slots.All.findSlot(item)
+    if (!slot || !slot.itemStack) continue
+
+    const stack = slot.itemStack
+    const cooldownManager = mc.player.getItemCooldownManager()
+    const inCd = cooldownManager.isCoolingDown(stack)
+
+    if (inCd) {
+      cooldownNotified.add(item) 
+    } else {
+      if (cooldownNotified.has(item)) {
+        Client.eventManager.callEvent(
+          new NotificationEvent("FT-Assistant", `${stack.getName().getString()} готов к использованию`, NotificationEvent.Severity.SUCCESS)
+        )
+        cooldownNotified.delete(item)
+      }
+    }
+  }
+
+  switch (current_item) {
+    case assitant_items.disorientation: useItem(Slots.All.findSlot(assitant_items.disorientation), "Дезориентация"); break
+    case assitant_items.dust: useItem(Slots.All.findSlot(assitant_items.dust), "Явная пыль"); break
+    case assitant_items.trap: useItem(Slots.All.findSlot(assitant_items.trap), "Трапка"); break
+    case assitant_items.aura: useItem(Slots.All.findSlot(assitant_items.aura), "Божья аура"); break
+    case assitant_items.tornado: useItem(Slots.All.findSlot(assitant_items.tornado), "Огненный смерч"); break
+    case assitant_items.layer: useItem(Slots.All.findSlot(assitant_items.layer), "Пласт"); break
+    case assitant_items.prizm: useItem(Slots.All.findSlot(assitant_items.prizm), "Призма"); break
+    case assitant_items.snowball: useItem(Slots.All.findSlot(assitant_items.snowball), "Снежок"); break
+    case assitant_items.netherstar: useItem(Slots.All.findSlot(assitant_items.netherstar), "Звезда Незера"); break
+  }
+})
+
+
+  function hasPlayerInRadius(radius) {
+    const player = mc.player
+    if (!mc.world) return false
+
+    for (const entity of mc.world.getEntities()) {
+      if (PlayerEntity.class.isInstance(entity) && entity.getUuid() !== player.getUuid()) {
+        if (getDistance(player, entity) <= radius) return true
+      }
+    }
+    return false
+  }
+
+
+  mod.on("key", e => {
+    if (e.getAction() != key_actions.down) return
+    const translation_key = e.getKey().getTranslationKey()
+
+    let selectedItem = assitant_items.none
+    if (translation_key == mod.settings.disorientation.value) selectedItem = assitant_items.disorientation
+    else if (translation_key == mod.settings.dust.value) selectedItem = assitant_items.dust
+    else if (translation_key == mod.settings.trap.value) selectedItem = assitant_items.trap
+    else if (translation_key == mod.settings.aura.value) selectedItem = assitant_items.aura
+    else if (translation_key == mod.settings.tornado.value) selectedItem = assitant_items.tornado
+    else if (translation_key == mod.settings.layer.value) selectedItem = assitant_items.layer
+    else if (translation_key == mod.settings.prizm.value) selectedItem = assitant_items.prizm
+    else if (translation_key == mod.settings.snowball.value) selectedItem = assitant_items.snowball
+    else if (translation_key == mod.settings.netherstar.value) selectedItem = assitant_items.netherstar
+
+  if (selectedItem !== assitant_items.none) {
+    if (
+      mod.settings.checkRadius.value && selectedItem !== assitant_items.aura  &&  !hasPlayerInRadius(6)) {
+      Client.eventManager.callEvent(
+        new NotificationEvent("FT-Assistant", "Рядом никого нет", NotificationEvent.Severity.ERROR)
+      )
+      return
+    }
+
+    const slot = Slots.All.findSlot(selectedItem)
+    if (slot && isOnCooldown(slot.itemStack)) {
+      Client.eventManager.callEvent(
+        new NotificationEvent("FT-Assistant", "Предмет ещё в кд!", NotificationEvent.Severity.ERROR)
+      )
+      return
+    }
+
+    current_item = selectedItem
+  }
+  })
+
+  mod.on("disable", () => { current_item = assitant_items.none })
+
+    function formatKeybind(key) {
+        const val = key.value.toString()
+        if (val === "key.keyboard.unknown") return ""
+
+        if (val.startsWith("key.mouse.")) {
+            const mouseKey = val.replace("key.mouse.", "")
+            switch (mouseKey) {
+                case "left": return "LMB"
+                case "right": return "RMB"
+                case "middle": return "MMB"
+                default: return "M" + mouseKey
+            }
+        }
+
+        if (val.startsWith("key.keyboard.")) {
+            const k = val.replace("key.keyboard.", "")
+            return k.length > 3 ? k.substring(0, 3) : k
+        }
+
+        return val.length > 3 ? val.substring(0, 3) : val
+    }
+
+
+  function draw_keybind(font_renderer, setting, x, y) {
+    const text = font_renderer.process(formatKeybind(setting), WHITE)
+    font_renderer.draw(
+      text,
+      Primitives.float(x - (font_renderer.getStringWidth(text, false) * 0.15) / 2), 
+      Primitives.float(y + 4),
+      false,
+      0,
+      Primitives.float("0.2")
+    )
+  }
+mod.on("enable", () => {
+    Client.displayChatMessage("§7[§dAssistant§7] §fПодпишись на автора, все фиксы и обновы, а так же много другого контента будут тут: §bhttps://t.me/nohurted")
+})
+
+
+mod.on("overlayRender", e => {
+    const matrices = e.getContext().getMatrices()
+    const font_renderer = FontManager.INSTANCE.FONT_RENDERER
+    const cooldownManager = mc.player.getItemCooldownManager()
+
+    RenderShortcutsKt.renderEnvironmentForGUI(matrices, env => {
+        env.withMatrixStack(() => {
+            const menuX = mod.settings.menuX.value
+            const menuY = mod.settings.menuY.value
+            matrices.translate(menuX, menuY, 0)
+
+            let itemCount = 0
+            for (let k in assitant_items) {
+                if (assitant_items[k] === assitant_items.none) continue
+                let slot = Slots.All.findSlot(assitant_items[k])
+                if (!slot || !slot.itemStack) continue
+                itemCount++
+            }
+
+            const bgWidth = (itemCount * 18) + 4 // 4px запас
+            const bgHeight = 20
+
+            // фон
+            RenderShortcutsKt.withColor(env, new Color4b(26, 24, 24, 167), () => {
+                RenderShortcutsKt.drawQuad(env, new Vec3(0, 0, 0), new Vec3(bgWidth, bgHeight, 0))
+            })
+            RenderShortcutsKt.withColor(env, new Color4b(26, 24, 24, 255), () => {
+                RenderShortcutsKt.drawQuadOutlines(env, new Vec3(0, 0, 0), new Vec3(bgWidth, bgHeight, 0))
+            })
+
+// рисуем предметы + кейбинды
+              let alignment = 2
+for (let k in assitant_items) {
+    const item = assitant_items[k]
+    if (item === assitant_items.none) continue
+
+    const slot = Slots.All.findSlot(item)
+    if (!slot || !slot.itemStack) continue
+
+    const itemStack = slot.itemStack
+
+
+ 
+    e.getContext().drawItem(itemStack, alignment, 2)
+
+  
+    const progress = cooldownManager.getCooldownProgress(itemStack, 0.0)
+    if (progress > 0) {
+        const barWidth = 16
+        const barHeight = 2
+        const filledWidth = Math.floor(barWidth * progress)
+        RenderShortcutsKt.withColor(env, WHITE, () => {
+            RenderShortcutsKt.drawQuad(env, new Vec3(alignment, 0, 0), new Vec3(filledWidth, barHeight, 0))
+        })
+    }
+
+    const buffers = new FontRendererBuffers()
+    try {
+        let setting = mod.settings[k]
+        draw_keybind(font_renderer, setting, alignment + 8, 0)
+        env.commit(font_renderer, buffers)
+    } finally { buffers.draw() }
+
+    alignment += 18
+}
+
+
+
+        })
+    })
+})
+
+
+
+})
