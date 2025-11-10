@@ -157,7 +157,7 @@ public class Aura extends Module {
 
     private int hitTicks;
     private int trackticks;
-    private boolean lookingAtHitbox;
+    
 
     private final Timer delayTimer = new Timer();
     private final Timer pauseTimer = new Timer();
